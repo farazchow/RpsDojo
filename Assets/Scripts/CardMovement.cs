@@ -11,29 +11,31 @@ public class CardMovement : MonoBehaviour, IDragHandler, IPointerDownHandler, IP
     private Canvas canvas;
     private Vector2 originalLocalPointerPosition;
     private Vector3 originalPanelLocalPosition;
-    private Vector3 originalScale;
+    [SerializeField] private Vector3 originalScale;
     [SerializeField] private CardState currentState;
     private Quaternion originalRotation;
     private Vector3 originalPosition;
     private int originalSiblingIndex;
-    private GraphicRaycaster raycaster;
-    private EventSystem eventSystem;
+    private HandManager handManager;
+    private Vector3 playPosition;
+    // private GraphicRaycaster raycaster;
+    // private EventSystem eventSystem;
     
     [SerializeField]private Vector3 moveTarget;
     [SerializeField] private float selectScale = 1.1f;
     [SerializeField] private Vector2 cardPlay;
-    [SerializeField] private Vector2 cardUnplay;
-    [SerializeField] private Vector3 playPosition;
     [SerializeField] private GameObject glowEffect;
     [SerializeField] private GameObject playArrow;
     [SerializeField] public float speed = 1f;
 
     void Awake()
     {
-        eventSystem = FindAnyObjectByType<EventSystem>();
         rectTransform = GetComponent<RectTransform>();
         canvas = GetComponentInParent<Canvas>();
-        raycaster = GetComponentInParent<GraphicRaycaster>();
+        handManager = GetComponentInParent<HandManager>();
+        playPosition = handManager.playPosition;
+        // eventSystem = FindAnyObjectByType<EventSystem>();
+        // raycaster = GetComponentInParent<GraphicRaycaster>();
     }
 
     void Start()
@@ -69,17 +71,14 @@ public class CardMovement : MonoBehaviour, IDragHandler, IPointerDownHandler, IP
     // Pointer Events
     public void OnPointerEnter(PointerEventData eventData)
     {
-        // Mouse is down already
-        if (Input.GetMouseButton(0))
-        {
-            return;
-        }
+        // We already have a card selected
+        if (handManager.selectedCard) { return; }
 
         if (currentState == CardState.Default) 
         {
             currentState = CardState.Hover;
         }
-        else if (currentState == CardState.Played)
+        else if (currentState == CardState.Played && rectTransform.localPosition == playPosition)
         {
             currentState = CardState.PlayedHovered;
         }
@@ -100,6 +99,7 @@ public class CardMovement : MonoBehaviour, IDragHandler, IPointerDownHandler, IP
     {
         if (currentState == CardState.Hover || currentState == CardState.PlayedHovered)
         {
+            handManager.SetSelected(gameObject);
             currentState = (currentState == CardState.Hover) ? CardState.Dragged : CardState.PlayedDragged;
             RectTransformUtility.ScreenPointToLocalPointInRectangle(
                 canvas.GetComponent<RectTransform>(),
@@ -113,6 +113,8 @@ public class CardMovement : MonoBehaviour, IDragHandler, IPointerDownHandler, IP
 
     public void OnDrag(PointerEventData eventData)
     {
+        if (handManager.selectedCard != gameObject) { return; }
+
         if (currentState == CardState.Dragged || currentState == CardState.PlayedDragged)
         {
             Vector2 localPointerPosition;
@@ -132,48 +134,27 @@ public class CardMovement : MonoBehaviour, IDragHandler, IPointerDownHandler, IP
 
     public void OnPointerUp(PointerEventData eventData)
     {
-        if ((currentState == CardState.PlayedDragged && rectTransform.localPosition.y > cardUnplay.y) || 
-            (currentState == CardState.Dragged && rectTransform.localPosition.y > cardPlay.y))
+        if (handManager.selectedCard != gameObject) { return; }
+        if (currentState != CardState.PlayedDragged && currentState != CardState.Dragged) { return; }
+
+        if (rectTransform.localPosition.y > cardPlay.y)
         {
-            currentState = CardState.Played;
             moveTarget = playPosition;
-        } 
-        else
-        {
+            if (currentState == CardState.Dragged)
+            {
+                handManager.PlayCard(gameObject);
+            }
+            currentState = CardState.Played;
+        } else {
+            if (currentState == CardState.PlayedDragged)
+            {
+                handManager.UnplayCard(gameObject);
+            }
             TransitionToState0();
         }
     }
 
     // Handling Different States
-    private void HandlePlayState()
-    {   
-        glowEffect.SetActive(false);
-        playArrow.SetActive(true);
-        rectTransform.localRotation = Quaternion.identity;
-        SlideTo(playPosition);
-
-        // Check to see if we are still hovering the card
-        if (rectTransform.localPosition == playPosition)
-        {
-            PointerEventData pointerEventData = new PointerEventData(eventSystem); 
-            pointerEventData.position = Input.mousePosition; 
-            List<RaycastResult> results = new List<RaycastResult>(); 
-            raycaster.Raycast(pointerEventData, results);
-            foreach (RaycastResult result in results)
-            {
-                Debug.Log(result.gameObject.name);
-            }
-
-            if (results.Count != 0)
-            {
-                currentState = CardState.PlayedHovered;
-            } else
-            {
-                currentState = CardState.Played;
-            }
-        }
-    }
-
     private void HandleHoverState()
     {
         glowEffect.SetActive(true);
@@ -190,9 +171,19 @@ public class CardMovement : MonoBehaviour, IDragHandler, IPointerDownHandler, IP
         SlideTo(moveTarget);
     }
 
+    private void HandlePlayState()
+    {   
+        glowEffect.SetActive(false);
+        playArrow.SetActive(true);
+        rectTransform.localRotation = Quaternion.identity;
+        SlideTo(playPosition);
+    }
+
     // Utility Functions
     private void TransitionToState0()
     {
+        // Will Release if necessary
+        handManager.ReleaseSelected(gameObject);
         currentState = CardState.Default;
 
         // Reset Transform
@@ -200,32 +191,33 @@ public class CardMovement : MonoBehaviour, IDragHandler, IPointerDownHandler, IP
         rectTransform.localRotation = originalRotation;
         // rectTransform.localPosition = originalPosition;
         moveTarget = originalPosition;
-        SlideTo(originalPosition);
+        
         rectTransform.SetSiblingIndex(originalSiblingIndex);
         glowEffect.SetActive(false);
         playArrow.SetActive(false);
 
-        // Check to see if we are still hovering the card
-        // Make sure mouse not clicked to ensure we don't hover new cards while dragging another
-        // if (rectTransform.localPosition == originalPosition && !Input.GetMouseButton(0))
-        // {
-        //     PointerEventData pointerEventData = new PointerEventData(eventSystem); 
-        //     pointerEventData.position = Input.mousePosition; 
-        //     List<RaycastResult> results = new List<RaycastResult>(); 
-        //     raycaster.Raycast(pointerEventData, results);
-        //     if (results.Count != 0)
-        //     {
-        //         currentState = CardState.Hover;
-        //     }
-        // }
     }
 
-    public void SlideTo(Vector3 newPos)
+    public Boolean SlideTo(Vector3 newPos)
     {
-        if (rectTransform.localPosition == newPos) { return; }
+        if (rectTransform.localPosition == newPos) {
+            // if (!Input.GetMouseButton(0))
+            // {
+            //     PointerEventData pointerEventData = new PointerEventData(eventSystem); 
+            //     pointerEventData.position = Input.mousePosition; 
+            //     List<RaycastResult> results = new List<RaycastResult>(); 
+            //     raycaster.Raycast(pointerEventData, results);
+            //     if (results.Count != 0 && results)
+            //     {
+            //         currentState = CardState.Hover;
+            //     }
+            // }
+            return true; 
+        }
 
         float journeyFraction = Time.deltaTime * 1000 * speed / Vector3.Distance(rectTransform.localPosition, newPos);
         rectTransform.localPosition = Vector3.Lerp(rectTransform.localPosition, newPos, journeyFraction);
+        return false;
     }
 
     public void SaveTransform()
@@ -235,6 +227,15 @@ public class CardMovement : MonoBehaviour, IDragHandler, IPointerDownHandler, IP
         originalPosition = rectTransform.localPosition;
         originalSiblingIndex = rectTransform.GetSiblingIndex();
         moveTarget = rectTransform.localPosition;
+    }
+
+    public void SetTransform(Vector3 position, Quaternion rotation, Vector2 scale, int index)
+    {
+        rectTransform.localRotation = rotation;
+        rectTransform.localPosition = position;
+        rectTransform.SetSiblingIndex(index);
+        rectTransform.localScale = scale;
+        SaveTransform();
     }
 
     public enum CardState
